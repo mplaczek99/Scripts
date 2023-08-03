@@ -1,0 +1,17 @@
+sending incremental file list
+./
+testfile.txt
+
+sent 252 bytes  received 39 bytes  582.00 bytes/sec
+total size is 2,093,467  speedup is 7,194.04
+sending incremental file list
+./
+
+sent 182 bytes  received 20 bytes  404.00 bytes/sec
+total size is 2,093,467  speedup is 10,363.70
+sending incremental file list
+deleting backup/
+./
+
+sent 178 bytes  received 27 bytes  410.00 bytes/sec
+total size is 2,093,467  speedup is 10,212.03
