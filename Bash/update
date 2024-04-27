@@ -1,0 +1,51 @@
+#!/bin/bash
+
+release_file=/etc/os-release
+logfile=/var/log/updater.log
+errorlog=/var/log/updater_errors.log
+
+# Default location for flatpak
+flatpak=/usr/bin/flatpak
+
+check_exit_status() {
+    if [ $? -ne 0 ]
+    then
+        echo "An error occured, please check the $errorlog file."
+    fi
+}
+
+update_flatpak() {
+    if [ -f $flatpak ]
+    then
+        echo "Checking and Updating Flatpak."
+        flatpak update 1>>$logfile 2>>$errorlog
+    fi
+}
+
+# Always clear the log files
+echo "Clearing the previous log files."
+sudo truncate -s 0 $logfile 1>>$logfile 2>>$errorlog
+sudo truncate -s 0 $errorlog 1>>$logfile 2>>$errorlog
+check_exit_status
+
+if grep -q "Arch" $release_file
+then
+    # The host is based on Arch, run the pacman update command
+    echo "Checking and Updating pacman."
+    sudo pacman -Syu 1>>$logfile 2>>$errorlog
+    check_exit_status
+fi
+
+if grep -q "Pop" $release_file || grep -q "Ubuntu" $release_file
+then
+    # The host is based on Pop or Ubuntu
+    # Run the apt version of the command
+    echo "Checking for apt updates."
+    sudo apt update 1>>$logfile 2>>$errorlog
+    check_exit_status
+
+    echo "Updating apt."
+    sudo apt dist-upgrade -y 1>>$logfile 2>>$errorlog
+    update_flatpak
+    check_exit_status
+fi
