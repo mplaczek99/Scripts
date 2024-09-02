@@ -23,21 +23,22 @@ show_progress() {
 # Function to perform git pull and categorize results
 perform_git_pull() {
     local dir="$1"
-    local repo_name output
+    local repo_name output subdir
 
     repo_name=$(basename "$dir")
+    subdir=$(basename "$(dirname "$dir")") # Get the parent directory name (e.g., System76, Other)
     output=$(git -C "$dir" pull 2>&1)
 
     # Categorize the results using case
     case "$output" in
         *"Already up to date."*)
-            up_to_date+=("${COLOR_GREEN}Already up to date: $repo_name${COLOR_RESET}")
+            up_to_date+=("${COLOR_GREEN}[$subdir] Already up to date: $repo_name${COLOR_RESET}")
             ;;
         *"Updating"*|*"Fast-forward"*)
-            updated+=("${COLOR_YELLOW}Updated: $repo_name${COLOR_RESET}")
+            updated+=("${COLOR_YELLOW}[$subdir] Updated: $repo_name${COLOR_RESET}")
             ;;
         *)
-            failed+=("${COLOR_RED}Failed to update: $repo_name${COLOR_RESET}")
+            failed+=("${COLOR_RED}[$subdir] Failed to update: $repo_name${COLOR_RESET}")
             ;;
     esac
 }
