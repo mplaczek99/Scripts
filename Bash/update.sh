@@ -17,13 +17,13 @@ declare -a up_to_date updated failed
 show_progress() {
     local current=$1 total=$2 width=50
     local progress=$((current * width / total))
-    printf "\r[%-${width}s] %d%%" $(printf "%0.s#" $(seq 1 $progress)) "$((current * 100 / total))"
+    printf "\r[%-${width}s] %d%%" "$(printf "%0.s#" $(seq 1 $progress))" "$((current * 100 / total))"
 }
 
 # Function to perform git pull and categorize results
 perform_git_pull() {
     local dir="$1"
-    local repo_name output subdir
+    local repo_name subdir output
 
     repo_name=$(basename "$dir")
     subdir=$(basename "$(dirname "$dir")") # Get the parent directory name (e.g., System76, Other)
@@ -56,18 +56,18 @@ done
 
 # Function to print a category summary
 print_summary() {
-    local category="$1" name_array=("$@")
-    local count=${#name_array[@]}
-    
-    if [[ $count -gt 1 ]]; then
-        echo -e "\n$category ($((count-1))):"
-        printf "  - %b\n" "${name_array[@]:1}"
+    local category="$1" items=("${!2}")
+    local count=${#items[@]}
+
+    if (( count > 0 )); then
+        echo -e "\n$category ($count):"
+        printf "  - %b\n" "${items[@]}"
     fi
 }
 
 # Output the categorized summary
 echo -e "\n\n${COLOR_BLUE}Summary of actions:${COLOR_RESET}"
-print_summary "Repositories already up to date" "${up_to_date[@]}"
-print_summary "Repositories updated" "${updated[@]}"
-print_summary "Repositories failed to update" "${failed[@]}"
+print_summary "Repositories already up to date" up_to_date[@]
+print_summary "Repositories updated" updated[@]
+print_summary "Repositories failed to update" failed[@]
 echo
