@@ -20,11 +20,6 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# Create the snapshot
-echo "Creating snapshot $SNAPSHOT_NAME for volume ${VG_NAME}/${LV_NAME}"
-lvcreate -L "$SNAP_SIZE" -s -n "$SNAPSHOT_NAME" "/dev/$VG_NAME/$LV_NAME"
-echo "Snapshot $SNAPSHOT_NAME created successfully."
-
 # Cleanup: Remove older snapshots, keeping only the last $SNAP_LIMIT
 echo "Cleaning up old snapshots. Keeping the last $SNAP_LIMIT snapshots."
 
@@ -40,3 +35,8 @@ if [[ -n "$SNAPSHOTS_TO_REMOVE" ]]; then
 else
     echo "No old snapshots to remove."
 fi
+
+# Now, create the snapshot after cleaning up old ones
+echo "Creating snapshot $SNAPSHOT_NAME for volume ${VG_NAME}/${LV_NAME}"
+lvcreate -L "$SNAP_SIZE" -s -n "$SNAPSHOT_NAME" "/dev/$VG_NAME/$LV_NAME"
+echo "Snapshot $SNAPSHOT_NAME created successfully."
