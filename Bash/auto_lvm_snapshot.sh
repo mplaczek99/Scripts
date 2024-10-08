@@ -9,7 +9,7 @@ SNAP_LIMIT=9 # Number of snapshots to keep
 LOG_FILE="/var/log/auto_lvm_snapshot.log"
 
 # Create a timestamp
-TIMESTAMP=$(date +"%F_%H%M%S")
+TIMESTAMP=$(date +"%F")
 
 # Function to log messages
 log() {
