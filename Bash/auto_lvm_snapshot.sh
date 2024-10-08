@@ -1,47 +1,42 @@
 #!/bin/bash
 
+# Exit immediately if a command exits with a non-zero status
+set -e
+
 # Variables
 VG_NAME="data"
 LV_NAME="root"
 SNAP_NAME="snap"
 SNAP_SIZE="100G"
-SNAP_LIMIT=9 # Number of snapshots to keep
-LOG_FILE="/var/log/auto_lvm_snapshot.log"
+SNAP_LIMIT=9  # Number of snapshots to keep
 
 # Create a timestamp
 TIMESTAMP=$(date +"%F")
+SNAPSHOT_NAME="${SNAP_NAME}_${TIMESTAMP}"
 
-# Function to log messages
-log() {
-    echo "$(date +"%F %T") - $1" >> $LOG_FILE
-}
-
-# Create the snapshot
-log "Creating snapshot ${SNAP_NAME}_${TIMESTAMP} for volume ${VG_NAME}/${LV_NAME}"
-sudo lvcreate -L $SNAP_SIZE -s -n ${SNAP_NAME}_${TIMESTAMP} /dev/$VG_NAME/$LV_NAME &>> $LOG_FILE
-
-# Check if snapshot creation was successful
-if [ $? -eq 0 ]; then
-    log "Snapshot ${SNAP_NAME}_${TIMESTAMP} created successfully."
-else
-    log "Error: Failed to create snapshot ${SNAP_NAME}_${TIMESTAMP}."
+# Ensure the script is run as root
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root." >&2
     exit 1
 fi
 
-# Remove older snapshots, keeping only the last $SNAP_LIMIT snapshots
-log "Cleaning up old snapshots. Keeping the last $SNAP_LIMIT snapshots."
+# Create the snapshot
+echo "Creating snapshot $SNAPSHOT_NAME for volume ${VG_NAME}/${LV_NAME}"
+lvcreate -L "$SNAP_SIZE" -s -n "$SNAPSHOT_NAME" "/dev/$VG_NAME/$LV_NAME"
+echo "Snapshot $SNAPSHOT_NAME created successfully."
 
-SNAPSHOTS=$(lvs --noheadings -o lv_name,lv_time --sort lv_time | grep "^$SNAP_NAME" | awk '{print $1}' | head -n -$SNAP_LIMIT)
+# Cleanup: Remove older snapshots, keeping only the last $SNAP_LIMIT
+echo "Cleaning up old snapshots. Keeping the last $SNAP_LIMIT snapshots."
 
-if [ -n "$SNAPSHOTS" ]; then
-    for SNAPSHOT in $SNAPSHOTS; do
-        sudo lvremove -f /dev/$VG_NAME/$SNAPSHOT &>> $LOG_FILE
-        if [ $? -eq 0 ]; then
-            log "Snapshot $SNAPSHOT removed successfully."
-        else
-            log "Error: Failed to remove snapshot $SNAPSHOT."
-        fi
-    done
+# Get list of snapshots sorted by creation time, excluding the ones to keep
+SNAPSHOTS_TO_REMOVE=$(lvs --noheadings -o lv_name,lv_time --sort lv_time \
+    --select "lv_name =~ ^${SNAP_NAME}_.* && vg_name='${VG_NAME}'" | \
+    awk '{print $1}' | tail -n +$((SNAP_LIMIT+1)))
+
+# Only proceed if there are snapshots to remove
+if [[ -n "$SNAPSHOTS_TO_REMOVE" ]]; then
+    echo "$SNAPSHOTS_TO_REMOVE" | xargs -I {} lvremove -f "/dev/$VG_NAME/{}" && \
+    echo "Old snapshots removed successfully."
 else
-    log "No snapshots to remove."
+    echo "No old snapshots to remove."
 fi
