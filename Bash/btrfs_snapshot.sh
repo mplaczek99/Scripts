@@ -1,9 +1,9 @@
 #!/bin/bash
 set -e
 
-SNAPSHOT_DIR="/btrfs_snapshots"
+SNAPSHOT_DIR="/snapshots"
 ROOT_SUBVOL="/"  # Adjust if your root subvolume is different
-MAX_SNAPSHOTS=5
+MAX_SNAPSHOTS=10
 
 # Ensure the snapshot directory exists
 mkdir -p "$SNAPSHOT_DIR"
@@ -35,6 +35,3 @@ if [ "${#SNAPSHOTS[@]}" -gt "$MAX_SNAPSHOTS" ]; then
         btrfs subvolume delete "$SNAPSHOT"
     done
 fi
-
-echo "Snapshot rotation complete. Current snapshots:"
-ls -1d snapshot-*
