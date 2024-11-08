@@ -26,9 +26,10 @@ sudo mkdir -p "$DEST_DIR"
 echo "Sending snapshot to $DEST_DIR"
 sudo btrfs send "$SNAPSHOT_PATH" | sudo btrfs receive "$DEST_DIR"
 
-# Optionally, delete the local snapshot if not needed
-# echo "Deleting local snapshot: $SNAPSHOT_PATH"
-# sudo btrfs subvolume delete "$SNAPSHOT_PATH"
+# Delete the local snapshot after sending
+echo "Deleting local snapshot: $SNAPSHOT_PATH"
+sudo btrfs subvolume delete "$SNAPSHOT_PATH"
+echo "Local snapshot deleted"
 
 # Rotate snapshots on the destination disk, keeping only the most recent $MAX_SNAPSHOTS
 cd "$DEST_DIR"
