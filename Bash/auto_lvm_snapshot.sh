@@ -8,7 +8,7 @@ VG_NAME="data"
 LV_NAME="root"
 SNAP_NAME="snap"
 SNAP_SIZE="100G"
-SNAP_LIMIT=9  # Number of snapshots to keep
+SNAP_LIMIT=5  # Number of snapshots to keep
 
 # Create a timestamp
 TIMESTAMP=$(date +"%F")
