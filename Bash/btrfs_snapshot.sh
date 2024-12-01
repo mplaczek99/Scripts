@@ -7,65 +7,86 @@ DEST_DIR="/mnt/backup/snapshots" # Destination directory on separate disk
 ROOT_SUBVOL="/"                  # Root subvolume path
 MAX_SNAPSHOTS=10                 # Number of snapshots to keep (minimum 2)
 
-# Ensure the local snapshot directory exists
+# Determine if sudo is needed
+if [ "$EUID" -ne 0 ]; then
+    SUDO_CMD="sudo"
+else
+    SUDO_CMD=""
+fi
+
+# Ensure the local and destination snapshot directories exist
 mkdir -p "$SNAPSHOT_DIR"
+$SUDO_CMD mkdir -p "$DEST_DIR"
 
 # Generate snapshot name with timestamp
-TIMESTAMP=$(date +%Y%m%d%H%M%S)
+TIMESTAMP=$(date +"%Y%m%d%H%M%S")
 SNAPSHOT_NAME="snapshot-$TIMESTAMP"
 SNAPSHOT_PATH="$SNAPSHOT_DIR/$SNAPSHOT_NAME"
 
-# Create the snapshot locally
-echo "Creating local snapshot: $SNAPSHOT_PATH"
-sudo btrfs subvolume snapshot -r "$ROOT_SUBVOL" "$SNAPSHOT_PATH"
+# Function to create a snapshot
+create_snapshot() {
+    echo "Creating local snapshot: $SNAPSHOT_PATH"
+    $SUDO_CMD btrfs subvolume snapshot -r "$ROOT_SUBVOL" "$SNAPSHOT_PATH"
+}
 
-# Find the previous snapshot
-cd "$SNAPSHOT_DIR"
-LOCAL_SNAPSHOTS=(snapshot-*)
-PREVIOUS_SNAPSHOT="${LOCAL_SNAPSHOTS[1]}"
+# Function to find the previous snapshot
+find_previous_snapshot() {
+    readarray -t LOCAL_SNAPSHOTS < <(ls -1dt "$SNAPSHOT_DIR"/snapshot-* 2>/dev/null)
+    if [ "${#LOCAL_SNAPSHOTS[@]}" -gt 1 ]; then
+        PREVIOUS_SNAPSHOT=$(basename "${LOCAL_SNAPSHOTS[1]}")
+    else
+        PREVIOUS_SNAPSHOT=""
+    fi
+}
 
-# Ensure the destination directory exists
-sudo mkdir -p "$DEST_DIR"
+# Function to send the snapshot
+send_snapshot() {
+    if [ -n "$PREVIOUS_SNAPSHOT" ] && [ -d "$DEST_DIR/$PREVIOUS_SNAPSHOT" ]; then
+        echo "Sending incremental snapshot to $DEST_DIR"
+        $SUDO_CMD btrfs send -p "$SNAPSHOT_DIR/$PREVIOUS_SNAPSHOT" "$SNAPSHOT_PATH" | $SUDO_CMD btrfs receive "$DEST_DIR"
+    else
+        echo "Parent snapshot not found on destination. Sending full snapshot."
+        $SUDO_CMD btrfs send "$SNAPSHOT_PATH" | $SUDO_CMD btrfs receive "$DEST_DIR"
+    fi
+}
 
-# Check if parent snapshot exists on destination
-if [ -n "$PREVIOUS_SNAPSHOT" ] && [ -d "$DEST_DIR/$PREVIOUS_SNAPSHOT" ]; then
-    echo "Sending incremental snapshot to $DEST_DIR"
-    sudo btrfs send -p "$SNAPSHOT_DIR/$PREVIOUS_SNAPSHOT" "$SNAPSHOT_PATH" | sudo btrfs receive "$DEST_DIR"
-else
-    echo "Parent snapshot not found on destination. Sending full snapshot."
-    sudo btrfs send "$SNAPSHOT_PATH" | sudo btrfs receive "$DEST_DIR"
-fi
+# Function to delete old snapshots
+delete_old_snapshots() {
+    # Delete older local snapshots, keeping the latest two
+    readarray -t LOCAL_SNAPSHOTS < <(ls -1dt "$SNAPSHOT_DIR"/snapshot-* 2>/dev/null)
+    if [ "${#LOCAL_SNAPSHOTS[@]}" -gt 2 ]; then
+        LOCAL_SNAPSHOTS_TO_DELETE=("${LOCAL_SNAPSHOTS[@]:2}")
+        for SNAPSHOT_PATH in "${LOCAL_SNAPSHOTS_TO_DELETE[@]}"; do
+            SNAPSHOT=$(basename "$SNAPSHOT_PATH")
+            if [ "$SNAPSHOT" != "$PREVIOUS_SNAPSHOT" ]; then
+                echo "Deleting old local snapshot: $SNAPSHOT"
+                $SUDO_CMD btrfs subvolume delete "$SNAPSHOT_PATH"
+            else
+                echo "Retaining parent snapshot locally: $SNAPSHOT"
+            fi
+        done
+    fi
 
-# Delete older local snapshots, keeping the latest two
-cd "$SNAPSHOT_DIR"
-readarray -t LOCAL_SNAPSHOTS < <(ls -1dt snapshot-*)
-if [ "${#LOCAL_SNAPSHOTS[@]}" -gt 2 ]; then
-    LOCAL_SNAPSHOTS_TO_DELETE=("${LOCAL_SNAPSHOTS[@]:2}")
-    for SNAPSHOT in "${LOCAL_SNAPSHOTS_TO_DELETE[@]}"; do
-        if [ "$SNAPSHOT" != "$PREVIOUS_SNAPSHOT" ]; then
-            echo "Deleting old local snapshot: $SNAPSHOT"
-            sudo btrfs subvolume delete "$SNAPSHOT_DIR/$SNAPSHOT"
-        else
-            echo "Retaining parent snapshot locally: $SNAPSHOT"
-        fi
-    done
-fi
+    # Rotate snapshots on the destination disk, keeping at most MAX_SNAPSHOTS
+    readarray -t DEST_SNAPSHOTS < <(ls -1dt "$DEST_DIR"/snapshot-* 2>/dev/null)
+    if [ "${#DEST_SNAPSHOTS[@]}" -gt "$MAX_SNAPSHOTS" ]; then
+        DEST_SNAPSHOTS_TO_DELETE=("${DEST_SNAPSHOTS[@]:$MAX_SNAPSHOTS}")
+        for SNAPSHOT_PATH in "${DEST_SNAPSHOTS_TO_DELETE[@]}"; do
+            SNAPSHOT=$(basename "$SNAPSHOT_PATH")
+            if [ "$SNAPSHOT" != "$PREVIOUS_SNAPSHOT" ]; then
+                echo "Deleting old snapshot on destination: $SNAPSHOT"
+                $SUDO_CMD btrfs subvolume delete "$DEST_DIR/$SNAPSHOT"
+            else
+                echo "Retaining parent snapshot on destination: $SNAPSHOT"
+            fi
+        done
+    fi
+}
 
-# Rotate snapshots on the destination disk, keeping at least two snapshots
-cd "$DEST_DIR"
-readarray -t DEST_SNAPSHOTS < <(ls -1dt snapshot-*)
-
-# Delete snapshots exceeding the maximum allowed, but keep necessary snapshots
-if [ "${#DEST_SNAPSHOTS[@]}" -gt "$MAX_SNAPSHOTS" ]; then
-    DEST_SNAPSHOTS_TO_DELETE=("${DEST_SNAPSHOTS[@]:$MAX_SNAPSHOTS}")
-    for SNAPSHOT in "${DEST_SNAPSHOTS_TO_DELETE[@]}"; do
-        if [ "$SNAPSHOT" != "$PREVIOUS_SNAPSHOT" ]; then
-            echo "Deleting old snapshot on destination: $SNAPSHOT"
-            sudo btrfs subvolume delete "$DEST_DIR/$SNAPSHOT"
-        else
-            echo "Retaining parent snapshot on destination: $SNAPSHOT"
-        fi
-    done
-fi
+# Main script execution
+create_snapshot
+find_previous_snapshot
+send_snapshot
+delete_old_snapshots
 
 echo "Snapshot transfer and rotation completed successfully."
