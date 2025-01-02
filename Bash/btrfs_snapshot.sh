@@ -41,12 +41,23 @@ find_previous_snapshot() {
 
 # Function to send the snapshot
 send_snapshot() {
-    if [ -n "$PREVIOUS_SNAPSHOT" ] && [ -d "$DEST_DIR/$PREVIOUS_SNAPSHOT" ]; then
-        echo "Sending incremental snapshot to $DEST_DIR"
-        $SUDO_CMD btrfs send -p "$SNAPSHOT_DIR/$PREVIOUS_SNAPSHOT" "$SNAPSHOT_PATH" | $SUDO_CMD btrfs receive "$DEST_DIR"
-    else
-        echo "Parent snapshot not found on destination. Sending full snapshot."
+    # Count how many snapshots are currently in the destination
+    SNAPSHOT_COUNT=$($SUDO_CMD ls -1d "$DEST_DIR"/snapshot-* 2>/dev/null | wc -l)
+    
+    # If it's the 7th snapshot (or a multiple of 7), do a full snapshot
+    # Adjust "7" to another number (e.g., 10, 30) if desired.
+    if (( SNAPSHOT_COUNT % 7 == 0 && SNAPSHOT_COUNT != 0 )); then
+        echo "Sending full snapshot (every 7th snapshot)."
         $SUDO_CMD btrfs send "$SNAPSHOT_PATH" | $SUDO_CMD btrfs receive "$DEST_DIR"
+    else
+        # Attempt an incremental snapshot if a valid parent exists at the destination
+        if [ -n "$PREVIOUS_SNAPSHOT" ] && [ -d "$DEST_DIR/$PREVIOUS_SNAPSHOT" ]; then
+            echo "Sending incremental snapshot to $DEST_DIR"
+            $SUDO_CMD btrfs send -p "$SNAPSHOT_DIR/$PREVIOUS_SNAPSHOT" "$SNAPSHOT_PATH" | $SUDO_CMD btrfs receive "$DEST_DIR"
+        else
+            echo "Parent snapshot not found on destination. Sending full snapshot."
+            $SUDO_CMD btrfs send "$SNAPSHOT_PATH" | $SUDO_CMD btrfs receive "$DEST_DIR"
+        fi
     fi
 }
 
@@ -56,11 +67,11 @@ delete_old_snapshots() {
     readarray -t LOCAL_SNAPSHOTS < <(ls -1dt "$SNAPSHOT_DIR"/snapshot-* 2>/dev/null)
     if [ "${#LOCAL_SNAPSHOTS[@]}" -gt 2 ]; then
         LOCAL_SNAPSHOTS_TO_DELETE=("${LOCAL_SNAPSHOTS[@]:2}")
-        for SNAPSHOT_PATH in "${LOCAL_SNAPSHOTS_TO_DELETE[@]}"; do
-            SNAPSHOT=$(basename "$SNAPSHOT_PATH")
+        for SNAP_PATH in "${LOCAL_SNAPSHOTS_TO_DELETE[@]}"; do
+            SNAPSHOT=$(basename "$SNAP_PATH")
             if [ "$SNAPSHOT" != "$PREVIOUS_SNAPSHOT" ]; then
                 echo "Deleting old local snapshot: $SNAPSHOT"
-                $SUDO_CMD btrfs subvolume delete "$SNAPSHOT_PATH"
+                $SUDO_CMD btrfs subvolume delete "$SNAP_PATH"
             else
                 echo "Retaining parent snapshot locally: $SNAPSHOT"
             fi
@@ -71,8 +82,8 @@ delete_old_snapshots() {
     readarray -t DEST_SNAPSHOTS < <(ls -1dt "$DEST_DIR"/snapshot-* 2>/dev/null)
     if [ "${#DEST_SNAPSHOTS[@]}" -gt "$MAX_SNAPSHOTS" ]; then
         DEST_SNAPSHOTS_TO_DELETE=("${DEST_SNAPSHOTS[@]:$MAX_SNAPSHOTS}")
-        for SNAPSHOT_PATH in "${DEST_SNAPSHOTS_TO_DELETE[@]}"; do
-            SNAPSHOT=$(basename "$SNAPSHOT_PATH")
+        for SNAP_PATH in "${DEST_SNAPSHOTS_TO_DELETE[@]}"; do
+            SNAPSHOT=$(basename "$SNAP_PATH")
             if [ "$SNAPSHOT" != "$PREVIOUS_SNAPSHOT" ]; then
                 echo "Deleting old snapshot on destination: $SNAPSHOT"
                 $SUDO_CMD btrfs subvolume delete "$DEST_DIR/$SNAPSHOT"
