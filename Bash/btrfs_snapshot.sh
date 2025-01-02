@@ -5,7 +5,7 @@ set -e
 SNAPSHOT_DIR="/.snapshots"       # Local snapshot directory on root filesystem
 DEST_DIR="/mnt/backup/snapshots" # Destination directory on separate disk
 ROOT_SUBVOL="/"                  # Root subvolume path
-MAX_SNAPSHOTS=10                 # Number of snapshots to keep (minimum 2)
+MAX_SNAPSHOTS=30                 # Number of snapshots to keep (minimum 2)
 
 # Determine if sudo is needed
 if [ "$EUID" -ne 0 ]; then
