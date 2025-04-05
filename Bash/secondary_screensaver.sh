@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # --- Configuration ---
-TIMEOUT_SECONDS=5      # Trigger screensaver after mouse is off Monitor 2 for this many seconds (e.g., 300 = 5 minutes)
-CHECK_INTERVAL_S=1       # How often to check mouse position (seconds) - shorter interval = more responsive
+TIMEOUT_SECONDS=300      # Trigger screensaver after mouse is off Monitor 2 for this many seconds (e.g., 300 = 5 minutes)
+CHECK_INTERVAL_S=5       # How often to check mouse position (seconds) - shorter interval = more responsive
 
 # --- Second Monitor Geometry (!!! MODIFY THESE from xrandr output !!!) ---
 MONITOR_WIDTH=1920
