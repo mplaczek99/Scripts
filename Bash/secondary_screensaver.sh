@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # --- Configuration ---
-TIMEOUT_SECONDS=300      # Trigger screensaver after mouse is off Monitor 2 for this many seconds (e.g., 300 = 5 minutes)
-CHECK_INTERVAL_S=5       # How often to check mouse position (seconds) - shorter interval = more responsive
+TIMEOUT_SECONDS=5      # Trigger screensaver after mouse is off Monitor 2 for this many seconds (e.g., 300 = 5 minutes)
+CHECK_INTERVAL_S=1       # How often to check mouse position (seconds) - shorter interval = more responsive
 
 # --- Second Monitor Geometry (!!! MODIFY THESE from xrandr output !!!) ---
 MONITOR_WIDTH=1920
@@ -18,7 +18,7 @@ MONITOR_Y_MAX=$((MONITOR_Y_OFFSET + MONITOR_HEIGHT))
 MONITOR_GEOMETRY="0,${MONITOR_X_OFFSET},${MONITOR_Y_OFFSET},${MONITOR_WIDTH},${MONITOR_HEIGHT}"
 
 # --- Screensaver Program (!!! MODIFY THIS if needed !!!) ---
-SCREENSAVER_CMD="/usr/libexec/xscreensaver/glmatrix -geometry 1920x1080+1920+0 -fullscreen" # Command to run the screensaver
+SCREENSAVER_CMD="/usr/libexec/xscreensaver/glmatrix -geometry 1920x1080+1920+0" # Command to run the screensaver
 SCREENSAVER_NAME="glmatrix" # The process name or a unique part of the command/window title
 
 # --- Internal Variables ---
