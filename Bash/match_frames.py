@@ -2,7 +2,7 @@
 # match_frames.py
 # Hard-coded for ClipA.mp4 and ClipB.mp4
 # Saves best 10 frame matches into ./matched_frames
-# Pretty console output with banners + final results table
+# Compact console output for ~80x24 terminals
 # Only CLI flag: --model (dinov2 or resnet50)
 
 import os, sys, math, heapq, shutil, argparse
@@ -11,7 +11,7 @@ import numpy as np
 
 # -------------------- CLI args (only --model) --------------------
 def parse_args():
-    p = argparse.ArgumentParser(description="Frame matcher")
+    p = argparse.ArgumentParser(description="Frame matcher (compact TTY output)")
     p.add_argument("--model", default="dinov2", choices=["dinov2", "resnet50"],
                    help="Feature extractor backbone")
     return p.parse_args()
@@ -41,35 +41,23 @@ except Exception as e:
     TORCH_OK = False
     TORCH_IMPORT_ERR = e
 
-# -------------------- Pretty printing helpers --------------------
-def _supports_color() -> bool:
+# -------------------- Pretty printing helpers (compact) --------------------
+def term_cols():
     try:
-        return sys.stdout.isatty() and os.environ.get("TERM") not in (None, "dumb", "")
+        return max(60, min(80, shutil.get_terminal_size((80, 24)).columns))
     except Exception:
-        return False
+        return 80
 
-_COLOR = _supports_color()
-def _c(code: str) -> str: return f"\033[{code}m" if _COLOR else ""
-def C_RESET(): return _c("0")
-def C_BOLD():  return _c("1")
-def C_DIM():   return _c("2")
-def C_CYAN():  return _c("36")
-def C_GREEN(): return _c("32")
-def C_YELLOW():return _c("33")
-
-def banner(title: str):
-    cols = max(60, shutil.get_terminal_size((80, 20)).columns)
-    line = "─" * (cols - 2)
-    print(f"{_c('1;36')}┌{line}┐{C_RESET()}")
-    center = title.center(cols - 2)
-    print(f"{_c('1;36')}│{C_RESET()}{_c('1')}{center}{C_RESET()}{_c('1;36')}│{C_RESET()}")
-    print(f"{_c('1;36')}└{line}┘{C_RESET()}")
+def sep(char="="):
+    print(char * term_cols())
 
 def kv(label: str, value: str):
-    print(f"{C_DIM()}{label:>14}{C_RESET()}: {value}")
+    print(f"{label}: {value}")
 
-def ok(msg: str): print(f"{C_GREEN()}✓{C_RESET()} {msg}")
-def warn(msg: str): print(f"{C_YELLOW()}!{C_RESET()} {msg}")
+def truncate(s: str, maxw: int) -> str:
+    if len(s) <= maxw: return s
+    if maxw <= 1: return "…"
+    return s[:maxw-1] + "…"
 
 # -------------------- Search defaults --------------------
 A_BLOCK_INIT = 2048
@@ -218,81 +206,118 @@ def save_frame_at_time(video_path, t_sec, out_path):
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     return cv2.imwrite(out_path, frame_bgr)
 
+def fmt_t_short(t: float) -> str:
+    # 6-wide with 3 decimals, zero-padded: e.g., 030.467
+    return f"{t:06.3f}"
+
+def build_filename(rank: int, which: str, t: float) -> str:
+    # which="A" or "B"; filename like 01_A_030.467.png
+    return f"{rank:02d}_{which}_{fmt_t_short(t)}.png"
+
 def print_results_table(rows):
+    """
+    rows: list of dicts with keys rank, pct, tA, tB, fileA, fileB
+    Fits within terminal width by truncating file columns if needed.
+    """
     if not rows:
-        print("  (no rows)")
+        print("(no rows)")
         return
+
+    # Base column definitions
     cols = [
-        ("Rank", "rank", 4),
-        ("Cosine", "cos", 8),
-        ("A time (s)", "tA", 11),
-        ("B time (s)", "tB", 11),
-        ("A file", "fileA", 26),
-        ("B file", "fileB", 26),
+        ("Rk",  lambda r: f"{r['rank']:>2}", 2),
+        ("Match%", lambda r: f"{r['pct']:>6.2f}%", 7),
+        ("tA(s)", lambda r: f"{r['tA']:>7.3f}", 7),
+        ("tB(s)", lambda r: f"{r['tB']:>7.3f}", 7),
+        ("A file", lambda r: r["fileA"], 14),  # min; will expand/truncate
+        ("B file", lambda r: r["fileB"], 14),
     ]
-    widths = []
-    for title, key, minw in cols:
-        content_w = max((len(f"{r[key]}") for r in rows), default=0)
-        widths.append(max(minw, len(title), content_w))
-    hdr = "  " + "  ".join(f"{C_BOLD()}{title:<{w}}{C_RESET()}" for (title, _, _), w in zip(cols, widths))
-    sep = "  " + "  ".join("─"*w for w in widths)
-    print(hdr); print(sep)
+
+    # Compute widths with a cap for terminal width
+    # Start with fixed widths for first 4 columns (+ 5 spaces between 6 columns)
+    fixed_sum = sum(w for _,_,w in cols[:4]) + 5  # spaces between columns
+    # Distribute remaining space to A/B file columns equally
+    total = term_cols()
+    rem = max(20, total - fixed_sum)  # ensure some space
+    each = rem // 2
+    widths = [cols[i][2] for i in range(4)] + [each, rem - each]
+
+    # Print header
+    header_parts = []
+    for (title, _, _), w in zip(cols, widths):
+        header_parts.append(truncate(title.ljust(w), w))
+    print(" ".join(header_parts))
+    print(" ".join(("─"*w) for w in widths))
+
+    # Rows
     for r in rows:
-        line = "  " + "  ".join([
-            f"{r['rank']:<{widths[0]}}",
-            f"{r['cos']:<{widths[1]}.6f}",
-            f"{r['tA']:<{widths[2]}.3f}",
-            f"{r['tB']:<{widths[3]}.3f}",
-            f"{r['fileA']:<{widths[4]}}",
-            f"{r['fileB']:<{widths[5]}}",
-        ])
-        print(line)
+        parts = []
+        for (title, fn, _), w in zip(cols, widths):
+            val = fn(r)
+            # Truncate filenames; other columns should already fit
+            parts.append(truncate(val.rjust(w) if title in ("Rk","Match%","tA(s)","tB(s)") else val.ljust(w), w))
+        print(" ".join(parts))
 
 def main():
-    banner("Frame Matching (DINO/ResNet, GPU tiled search)")
+    sep("=")
+    print("Frame Match (GPU tiled)")
+    sep("-")
     kv("Video A", VIDEO_A)
     kv("Video B", VIDEO_B)
     kv("Model", MODEL_NAME)
     kv("Output", OUTDIR)
     kv("TopK", str(TOPK))
     kv("Stride", str(STRIDE))
-    print()
+    sep("=")
 
     os.makedirs(OUTDIR, exist_ok=True)
-    print(f"{C_CYAN()}[1/3]{C_RESET()} Loading model…")
+    print("[1/3] Loading model…")
     model, input_hw, mean, std, device = load_feat_extractor(MODEL_NAME, "auto")
-    ok(f"Model on {device} (input {input_hw[0]}×{input_hw[1]})")
+    print(f"    Ready on {device} (input {input_hw[0]}x{input_hw[1]})")
 
-    print(f"{C_CYAN()}[2/3]{C_RESET()} Embedding videos…")
+    print("[2/3] Embedding videos…")
     feats_a = embed_video(VIDEO_A, model, input_hw, mean, std, device,
                           stride=STRIDE, init_batch=(12 if MODEL_NAME=="dinov2" else 64))
     feats_b = embed_video(VIDEO_B, model, input_hw, mean, std, device,
                           stride=STRIDE, init_batch=(12 if MODEL_NAME=="dinov2" else 64))
-    ok(f"Embedded A: {feats_a.shape[0]} frames")
-    ok(f"Embedded B: {feats_b.shape[0]} frames")
+    print(f"    A frames: {feats_a.shape[0]}")
+    print(f"    B frames: {feats_b.shape[0]}")
     if feats_a.shape[0] == 0 or feats_b.shape[0] == 0:
-        warn("No frames sampled; aborting."); sys.exit(1)
+        print("No frames sampled; aborting.")
+        sys.exit(1)
 
-    print(f"{C_CYAN()}[3/3]{C_RESET()} Searching similarities (tiled)…")
+    print("[3/3] Similarity search…")
     candidates = top_candidates_gpu(feats_a, feats_b, device,
                                     keep_cap=max(GLOBAL_HEAP_CAP, TOPK*8000),
                                     subblock_top=SUBBLOCK_TOP,
                                     a_block_init=A_BLOCK_INIT, b_block_init=B_BLOCK_INIT)
     if not candidates:
-        warn("No matches found."); sys.exit(2)
+        print("No matches found.")
+        sys.exit(2)
 
     selected = candidates[:TOPK]
     rows = []
     for rank, (ia, ib, s) in enumerate(selected, 1):
         ta, tb = time_from_index(VIDEO_A, ia, STRIDE), time_from_index(VIDEO_B, ib, STRIDE)
-        fileA = f"{rank:04d}_A_{ta:09.3f}s.png"
-        fileB = f"{rank:04d}_B_{tb:09.3f}s.png"
+        fileA = build_filename(rank, "A", ta)
+        fileB = build_filename(rank, "B", tb)
         save_frame_at_time(VIDEO_A, ta, os.path.join(OUTDIR, fileA))
         save_frame_at_time(VIDEO_B, tb, os.path.join(OUTDIR, fileB))
-        rows.append({"rank": rank, "cos": s, "tA": ta, "tB": tb, "fileA": fileA, "fileB": fileB})
+        rows.append({
+            "rank": rank,
+            "pct": s * 100.0,
+            "tA": ta,
+            "tB": tb,
+            "fileA": fileA,
+            "fileB": fileB
+        })
 
-    print(); banner("Top Matches"); print_results_table(rows)
-    print(); ok(f"Saved PNGs → {OUTDIR}/")
+    sep("=")
+    print("Top Matches")
+    sep("-")
+    print_results_table(rows)
+    sep("=")
+    print(f"Saved PNGs -> {OUTDIR}/")
 
 if __name__ == "__main__":
     main()
