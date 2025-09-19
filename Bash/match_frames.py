@@ -1,19 +1,29 @@
 #!/usr/bin/env python3
-# match_frames_pretty.py
+# match_frames.py
 # Hard-coded for ClipA.mp4 and ClipB.mp4
 # Saves best 10 frame matches into ./matched_frames
 # Pretty console output with banners + final results table
+# Only CLI flag: --model (dinov2 or resnet50)
 
-import os, sys, math, heapq, shutil
+import os, sys, math, heapq, shutil, argparse
 import cv2
 import numpy as np
+
+# -------------------- CLI args (only --model) --------------------
+def parse_args():
+    p = argparse.ArgumentParser(description="Frame matcher")
+    p.add_argument("--model", default="dinov2", choices=["dinov2", "resnet50"],
+                   help="Feature extractor backbone")
+    return p.parse_args()
+
+ARGS = parse_args()
+MODEL_NAME = ARGS.model
 
 # -------------------- Tunables --------------------
 VIDEO_A = "ClipA.mp4"
 VIDEO_B = "ClipB.mp4"
-TOPK = 10             # how many best pairs to save
-STRIDE = 1            # sample every Nth frame (1=native)
-MODEL_NAME = "dinov2" # or "resnet50"
+TOPK = 10
+STRIDE = 1
 OUTDIR = "matched_frames"
 
 # -------------------- CUDA allocator hint --------------------
@@ -39,18 +49,13 @@ def _supports_color() -> bool:
         return False
 
 _COLOR = _supports_color()
-
-def _c(code: str) -> str:
-    return f"\033[{code}m" if _COLOR else ""
-
+def _c(code: str) -> str: return f"\033[{code}m" if _COLOR else ""
 def C_RESET(): return _c("0")
 def C_BOLD():  return _c("1")
 def C_DIM():   return _c("2")
 def C_CYAN():  return _c("36")
 def C_GREEN(): return _c("32")
 def C_YELLOW():return _c("33")
-def C_MAG():   return _c("35")
-def C_BLUE():  return _c("34")
 
 def banner(title: str):
     cols = max(60, shutil.get_terminal_size((80, 20)).columns)
@@ -63,14 +68,8 @@ def banner(title: str):
 def kv(label: str, value: str):
     print(f"{C_DIM()}{label:>14}{C_RESET()}: {value}")
 
-def ok(msg: str):
-    print(f"{C_GREEN()}✓{C_RESET()} {msg}")
-
-def warn(msg: str):
-    print(f"{C_YELLOW()}!{C_RESET()} {msg}")
-
-def log(msg: str):
-    print(msg, flush=True)
+def ok(msg: str): print(f"{C_GREEN()}✓{C_RESET()} {msg}")
+def warn(msg: str): print(f"{C_YELLOW()}!{C_RESET()} {msg}")
 
 # -------------------- Search defaults --------------------
 A_BLOCK_INIT = 2048
@@ -88,21 +87,17 @@ def get_fps(path: str) -> float:
 
 def load_feat_extractor(model_name: str, device_pref: str = "auto"):
     if not TORCH_OK:
-        raise RuntimeError(
-            "PyTorch/TIMM not available. Install:\n"
-            "  pip install --upgrade torch torchvision timm pillow\n"
-            f"Import error: {TORCH_IMPORT_ERR}"
-        )
+        raise RuntimeError("PyTorch/TIMM not available. Install torch, timm, etc.")
     dev = "cuda" if (device_pref != "cpu" and torch.cuda.is_available()) else "cpu"
 
-    if model_name.lower() in ("dinov2", "vitb14", "dino"):
+    if model_name.lower() == "dinov2":
         backbone = "vit_base_patch14_dinov2"
         model = timm.create_model(backbone, pretrained=True, num_classes=0, global_pool="token")
-    elif model_name.lower() in ("resnet50", "rn50", "resnet"):
+    elif model_name.lower() == "resnet50":
         backbone = "resnet50"
         model = timm.create_model(backbone, pretrained=True, num_classes=0, global_pool="avg")
     else:
-        raise ValueError("Unknown model. Use 'dinov2' or 'resnet50'.")
+        raise ValueError("Unknown model. Use dinov2 or resnet50.")
 
     model.eval()
     if dev == "cuda":
@@ -136,14 +131,14 @@ def _autocast_ctx(device: str, dtype):
 
 @_no_grad
 def _forward_batch_gpu(frames_cpu, model, input_hw, mean, std, device, amp_dtype):
-    x = torch.from_numpy(np.stack(frames_cpu, axis=0))           # [N,H,W,3] uint8
+    x = torch.from_numpy(np.stack(frames_cpu, axis=0))
     x = x.to(device, non_blocking=True).permute(0,3,1,2).contiguous(memory_format=torch.channels_last)
     x = x.to(torch.float32).div_(255.0)
     x = torch.nn.functional.interpolate(x, size=input_hw, mode="bilinear", align_corners=False)
     x = (x - mean.to(device, non_blocking=True)) / std.to(device, non_blocking=True)
     with _autocast_ctx(device, amp_dtype):
         feats = model(x)
-    return feats  # [N, D] on device
+    return feats
 
 @_no_grad
 def embed_video(video_path: str, model, input_hw, mean, std, device,
@@ -153,11 +148,8 @@ def embed_video(video_path: str, model, input_hw, mean, std, device,
         raise RuntimeError(f"Failed to open video: {video_path}")
 
     amp_dtype = torch.float16 if (TORCH_OK and device == "cuda") else torch.bfloat16
-    feats_chunks, buf_frames, buf_ts = [], [], []
+    feats_chunks, buf_frames = [], []
     idx, batch = 0, init_batch
-
-    # light inline progress (frame count every ~1000 samples)
-    sampled = 0
 
     while True:
         ok, frame_bgr = cap.read()
@@ -165,38 +157,21 @@ def embed_video(video_path: str, model, input_hw, mean, std, device,
         if idx % stride == 0:
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             buf_frames.append(frame_rgb)
-            buf_ts.append(cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0)
-            sampled += 1
-            if sampled % 1000 == 0:
-                print(f"{C_DIM()}  …sampled {sampled} frames{C_RESET()}", end="\r", flush=True)
-
         if len(buf_frames) >= batch:
-            while True:
-                try:
-                    feats = _forward_batch_gpu(buf_frames[:batch], model, input_hw, mean, std, device, amp_dtype)
-                    feats_chunks.append(feats.detach().cpu())
-                    del feats, buf_frames[:batch], buf_ts[:batch]
-                    if device == "cuda": torch.cuda.empty_cache()
-                    break
-                except RuntimeError as e:
-                    if "out of memory" in str(e).lower() and batch > min_batch:
-                        batch = max(min_batch, batch // 2)
-                        if device == "cuda": torch.cuda.empty_cache()
-                        continue
-                    raise
+            feats = _forward_batch_gpu(buf_frames[:batch], model, input_hw, mean, std, device, amp_dtype)
+            feats_chunks.append(feats.detach().cpu())
+            del feats, buf_frames[:batch]
+            if device == "cuda": torch.cuda.empty_cache()
         idx += 1
 
-    # tail
     while buf_frames:
         take = min(batch, len(buf_frames))
         feats = _forward_batch_gpu(buf_frames[:take], model, input_hw, mean, std, device, amp_dtype)
         feats_chunks.append(feats.detach().cpu())
-        del feats, buf_frames[:take], buf_ts[:take]
+        del feats, buf_frames[:take]
         if device == "cuda": torch.cuda.empty_cache()
 
     cap.release()
-    if feats_chunks:
-        print(" " * 40, end="\r")  # clear progress line
     if not feats_chunks:
         dim = getattr(model, "num_features", 0) if TORCH_OK else 0
         return np.zeros((0, dim), np.float32)
@@ -212,12 +187,10 @@ def top_candidates_gpu(feats_a, feats_b, device, keep_cap=GLOBAL_HEAP_CAP,
     bT = l2norm_torch(torch.from_numpy(feats_b).to(device, non_blocking=True))
     Na, _ = aT.shape; Nb, _ = bT.shape
     heap, push, pushpop = [], heapq.heappush, heapq.heappushpop
-    Ablk, Bblk = a_block_init, b_block_init
-
-    for ai in range(0, Na, Ablk):
-        a_blk = aT[ai:ai+Ablk]
-        for bj in range(0, Nb, Bblk):
-            b_blk = bT[bj:bj+Bblk]
+    for ai in range(0, Na, a_block_init):
+        a_blk = aT[ai:ai+a_block_init]
+        for bj in range(0, Nb, b_block_init):
+            b_blk = bT[bj:bj+b_block_init]
             sims = a_blk @ b_blk.t()
             k = min(subblock_top, sims.numel())
             if k > 0:
@@ -230,7 +203,6 @@ def top_candidates_gpu(feats_a, feats_b, device, keep_cap=GLOBAL_HEAP_CAP,
                     elif s > heap[0][0]: pushpop(heap, (s, ia, jb))
             del sims
             if device == "cuda": torch.cuda.empty_cache()
-
     heap.sort(key=lambda x: x[0], reverse=True)
     return [(ia, jb, float(s)) for (s, ia, jb) in heap]
 
@@ -247,23 +219,24 @@ def save_frame_at_time(video_path, t_sec, out_path):
     return cv2.imwrite(out_path, frame_bgr)
 
 def print_results_table(rows):
-    """
-    rows: list of dicts with keys rank, cos, tA, tB, fileA, fileB
-    """
-    cols = [("Rank","#",4), ("Cosine","cos",8), ("A time (s)","tA",11), ("B time (s)","tB",11),
-            ("A file","fileA",26), ("B file","fileB",26)]
-    # compute widths
+    if not rows:
+        print("  (no rows)")
+        return
+    cols = [
+        ("Rank", "rank", 4),
+        ("Cosine", "cos", 8),
+        ("A time (s)", "tA", 11),
+        ("B time (s)", "tB", 11),
+        ("A file", "fileA", 26),
+        ("B file", "fileB", 26),
+    ]
     widths = []
     for title, key, minw in cols:
-        w = max(minw, len(title), max((len(str(r[key])) for r in rows), default=0))
-        widths.append(w)
-
-    # header
-    hdr = "  " + "  ".join(f"{C_BOLD()}{title:<{w}}{C_RESET()}" for (title,_,_), w in zip(cols, widths))
+        content_w = max((len(f"{r[key]}") for r in rows), default=0)
+        widths.append(max(minw, len(title), content_w))
+    hdr = "  " + "  ".join(f"{C_BOLD()}{title:<{w}}{C_RESET()}" for (title, _, _), w in zip(cols, widths))
     sep = "  " + "  ".join("─"*w for w in widths)
-    print(hdr)
-    print(sep)
-    # rows
+    print(hdr); print(sep)
     for r in rows:
         line = "  " + "  ".join([
             f"{r['rank']:<{widths[0]}}",
@@ -286,72 +259,40 @@ def main():
     print()
 
     os.makedirs(OUTDIR, exist_ok=True)
-
-    # Load model
     print(f"{C_CYAN()}[1/3]{C_RESET()} Loading model…")
     model, input_hw, mean, std, device = load_feat_extractor(MODEL_NAME, "auto")
     ok(f"Model on {device} (input {input_hw[0]}×{input_hw[1]})")
 
-    # Embed A
     print(f"{C_CYAN()}[2/3]{C_RESET()} Embedding videos…")
-    fps_a, fps_b = get_fps(VIDEO_A), get_fps(VIDEO_B)
-    kv("FPS A", f"{fps_a:.3f}")
-    kv("FPS B", f"{fps_b:.3f}")
-    init_batch = 12 if MODEL_NAME == "dinov2" else 64
-
     feats_a = embed_video(VIDEO_A, model, input_hw, mean, std, device,
-                          stride=STRIDE, init_batch=init_batch)
+                          stride=STRIDE, init_batch=(12 if MODEL_NAME=="dinov2" else 64))
     feats_b = embed_video(VIDEO_B, model, input_hw, mean, std, device,
-                          stride=STRIDE, init_batch=init_batch)
-    ok(f"Embedded A: {feats_a.shape[0]} frames, dim {feats_a.shape[1] if feats_a.size else 0}")
-    ok(f"Embedded B: {feats_b.shape[0]} frames, dim {feats_b.shape[1] if feats_b.size else 0}")
+                          stride=STRIDE, init_batch=(12 if MODEL_NAME=="dinov2" else 64))
+    ok(f"Embedded A: {feats_a.shape[0]} frames")
+    ok(f"Embedded B: {feats_b.shape[0]} frames")
     if feats_a.shape[0] == 0 or feats_b.shape[0] == 0:
-        warn("No frames sampled; aborting.")
-        sys.exit(1)
+        warn("No frames sampled; aborting."); sys.exit(1)
 
-    # Similarity search
     print(f"{C_CYAN()}[3/3]{C_RESET()} Searching similarities (tiled)…")
-    candidates = top_candidates_gpu(
-        feats_a, feats_b, device,
-        keep_cap=max(GLOBAL_HEAP_CAP, TOPK * 8000),
-        subblock_top=SUBBLOCK_TOP,
-        a_block_init=A_BLOCK_INIT, b_block_init=B_BLOCK_INIT
-    )
+    candidates = top_candidates_gpu(feats_a, feats_b, device,
+                                    keep_cap=max(GLOBAL_HEAP_CAP, TOPK*8000),
+                                    subblock_top=SUBBLOCK_TOP,
+                                    a_block_init=A_BLOCK_INIT, b_block_init=B_BLOCK_INIT)
     if not candidates:
-        warn("No similarity candidates found.")
-        sys.exit(2)
+        warn("No matches found."); sys.exit(2)
 
-    # Take top-K raw matches
     selected = candidates[:TOPK]
-
-    # Save + collect pretty table rows
     rows = []
     for rank, (ia, ib, s) in enumerate(selected, 1):
         ta, tb = time_from_index(VIDEO_A, ia, STRIDE), time_from_index(VIDEO_B, ib, STRIDE)
         fileA = f"{rank:04d}_A_{ta:09.3f}s.png"
         fileB = f"{rank:04d}_B_{tb:09.3f}s.png"
-        a_path = os.path.join(OUTDIR, fileA)
-        b_path = os.path.join(OUTDIR, fileB)
+        save_frame_at_time(VIDEO_A, ta, os.path.join(OUTDIR, fileA))
+        save_frame_at_time(VIDEO_B, tb, os.path.join(OUTDIR, fileB))
+        rows.append({"rank": rank, "cos": s, "tA": ta, "tB": tb, "fileA": fileA, "fileB": fileB})
 
-        ok_a = save_frame_at_time(VIDEO_A, ta, a_path)
-        ok_b = save_frame_at_time(VIDEO_B, tb, b_path)
-        if not (ok_a and ok_b):
-            warn(f"Save failed for rank {rank}: A={ok_a}, B={ok_b}")
-        rows.append({
-            "rank": rank,
-            "cos": s,
-            "tA": ta,
-            "tB": tb,
-            "fileA": fileA,
-            "fileB": fileB,
-        })
-
-    print()
-    banner("Top Matches")
-    print_results_table(rows)
-    print()
-    ok(f"Saved PNGs → {C_BOLD()}{OUTDIR}{C_RESET()}")
-    print(f"{C_DIM()}(Tip: open both files per row side-by-side to visually compare){C_RESET()}")
+    print(); banner("Top Matches"); print_results_table(rows)
+    print(); ok(f"Saved PNGs → {OUTDIR}/")
 
 if __name__ == "__main__":
     main()
